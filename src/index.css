@@ -1,0 +1,20 @@
+@import "tailwindcss";
+
+:root {
+  --brand-primary: #133958;
+  --brand-primary-deep: #003866;
+  --brand-accent-soft: #94ADAE;
+  --brand-muted: #678B8C;
+  --brand-white: #FFFFFF;
+  --brand-page: #F5F8F8;
+  --brand-surface-muted: #EAF0F0;
+  --brand-ink: #133958;
+  --brand-text: #2D4C64;
+  --brand-accent: #94ADAE;
+}
+
+body {
+  background: var(--brand-page);
+  color: var(--brand-ink);
+  font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+}
