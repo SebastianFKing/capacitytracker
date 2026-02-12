@@ -386,6 +386,53 @@ const MultiSelect = ({ options, value = [], onChange, placeholder, disabled }: a
   );
 };
 
+function ListManager({
+  title,
+  items,
+  newItem,
+  setNewItem,
+  onAdd,
+  onRemove
+}: {
+  title: string;
+  items: string[];
+  newItem: string;
+  setNewItem: React.Dispatch<React.SetStateAction<string>>;
+  onAdd: () => void;
+  onRemove: (item: string) => void;
+}) {
+  return (
+    <Card className="p-6 h-full flex flex-col">
+      <h3 className="font-bold text-[#133958] mb-4">{title}</h3>
+      <div className="flex gap-2 mb-4">
+        <input
+          className="flex-1 p-2 border border-slate-300 rounded-md text-sm"
+          placeholder={`Add ${title}...`}
+          value={newItem}
+          onChange={e => setNewItem(e.target.value)}
+          onKeyDown={e => e.key === 'Enter' && onAdd()}
+        />
+        <Button onClick={onAdd} variant="secondary" className="px-3">
+          <Plus size={16} />
+        </Button>
+      </div>
+      <div className="flex-1 overflow-auto max-h-60 space-y-2">
+        {items.map((item: string) => (
+          <div
+            key={item}
+            className="flex justify-between items-center p-2 bg-[#f5f8f8] rounded border border-slate-100 text-sm"
+          >
+            <span>{item}</span>
+            <button onClick={() => onRemove(item)} className="text-slate-400 hover:text-red-500">
+              <X size={14} />
+            </button>
+          </div>
+        ))}
+      </div>
+    </Card>
+  );
+}
+
 // --- Main Application ---
 
 export default function CapacityTrackerApp() {
@@ -558,30 +605,6 @@ function SettingsView({
   const removeEmployee = (name: string) => {
     setEmployees(employees.filter((e: Employee) => e.name !== name));
   };
-
-  const ListManager = ({ title, items, newItem, setNewItem, onAdd, onRemove }: any) => (
-    <Card className="p-6 h-full flex flex-col">
-      <h3 className="font-bold text-[#133958] mb-4">{title}</h3>
-      <div className="flex gap-2 mb-4">
-        <input 
-          className="flex-1 p-2 border border-slate-300 rounded-md text-sm"
-          placeholder={`Add ${title}...`}
-          value={newItem}
-          onChange={e => setNewItem(e.target.value)}
-          onKeyDown={e => e.key === 'Enter' && onAdd()}
-        />
-        <Button onClick={onAdd} variant="secondary" className="px-3"><Plus size={16} /></Button>
-      </div>
-      <div className="flex-1 overflow-auto max-h-60 space-y-2">
-        {items.map((item: string) => (
-          <div key={item} className="flex justify-between items-center p-2 bg-[#f5f8f8] rounded border border-slate-100 text-sm">
-            <span>{item}</span>
-            <button onClick={() => onRemove(item)} className="text-slate-400 hover:text-red-500"><X size={14} /></button>
-          </div>
-        ))}
-      </div>
-    </Card>
-  );
 
   return (
     <div className="space-y-6">
