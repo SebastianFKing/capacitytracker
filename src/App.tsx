@@ -28,8 +28,8 @@ type MatterType = 'Category1' | 'Category2' | 'Project';
 type Project = {
   id: string;
   name: string;
-  category: 'Category A' | 'Category B' | 'Category C';
-  matterType: MatterType;
+  category: MatterType;
+  matterType?: MatterType; // legacy field kept for backward compatibility
   owner: string;
   capacities: [number, number, number, number]; // 4 weeks
 };
@@ -65,7 +65,7 @@ type LoginAction =
 const INITIAL_OFFICES = ['Office A', 'Office B', 'Office C', 'Office D', 'Office E', 'Office F'];
 const INITIAL_MENTORS = ['Mentor 1', 'Mentor 2', 'Mentor 3', 'Mentor 4'];
 const INITIAL_LANGUAGES = ['English', 'French', 'German', 'Dutch', 'Spanish', 'Mandarin', 'Arabic'];
-const PROJECT_CATEGORIES = ['Category A', 'Category B', 'Category C'] as const;
+const PROJECT_CATEGORIES = ['Category1', 'Category2', 'Project'] as const;
 const WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'];
 const DEFAULT_WEEK_START = '2026-02-02';
 const IT_MASTER_PASSWORD = 'itpass123';
@@ -101,7 +101,7 @@ const MOCK_DB: Record<string, WeeklyEntry> = {
       {
         id: '1',
         name: 'Task1',
-        category: 'Category A',
+        category: 'Category1',
         matterType: 'Category1',
         owner: 'Supervisor 1',
         capacities: [25, 25, 20, 10]
@@ -109,7 +109,7 @@ const MOCK_DB: Record<string, WeeklyEntry> = {
       {
         id: '2',
         name: 'Task2',
-        category: 'Category A',
+        category: 'Category1',
         matterType: 'Category1',
         owner: 'Supervisor 2',
         capacities: [20, 20, 15, 10]
@@ -183,7 +183,20 @@ const formatDisplayDate = (dateStr: string) =>
 
 const clampCapacity = (value: number) => {
   if (!Number.isFinite(value)) return 0;
-  return Math.min(100, Math.max(0, Math.round(value)));
+  return Math.max(0, Math.round(value));
+};
+
+const normalizeCapacityInput = (value: unknown) => {
+  if (typeof value === 'number') return clampCapacity(value);
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (trimmed === '') return 0;
+    const digitsOnly = trimmed.replace(/\D+/g, '');
+    if (digitsOnly === '') return 0;
+    const withoutLeadingZeros = digitsOnly.replace(/^0+(?=\d)/, '');
+    return clampCapacity(Number(withoutLeadingZeros));
+  }
+  return clampCapacity(Number(value));
 };
 
 const getLatestEntryForEmployee = (employeeName: string, db: Record<string, WeeklyEntry>) => {
@@ -290,9 +303,53 @@ const getAllLeaveDates = (startDateStr: string, annualLeave: boolean[][]) => {
   return resultParts.join(', ');
 };
 
+const MATTER_TYPE_ALIASES: Record<string, MatterType> = {
+  Category1: 'Category1',
+  Category2: 'Category2',
+  Project: 'Project',
+  'Category 1': 'Category1',
+  'Category 2': 'Category2',
+  'Category A': 'Category1',
+  'Category B': 'Category2',
+  'Category C': 'Project'
+};
+
+const coerceMatterType = (value: unknown): MatterType | null => {
+  if (typeof value !== 'string') return null;
+  return MATTER_TYPE_ALIASES[value.trim()] || null;
+};
+
+const getProjectType = (
+  project: Pick<Project, 'category'> & Partial<Pick<Project, 'matterType'>>
+): MatterType => coerceMatterType(project.category) ?? coerceMatterType(project.matterType) ?? 'Project';
+
+const normalizeProject = (project: Project): Project => {
+  const normalizedType = getProjectType(project);
+  const rawCapacities = Array.isArray(project.capacities) ? project.capacities : [];
+  const normalizedCapacities = [0, 1, 2, 3].map((index) =>
+    normalizeCapacityInput(rawCapacities[index])
+  ) as [number, number, number, number];
+  return {
+    ...project,
+    category: normalizedType,
+    matterType: normalizedType,
+    capacities: normalizedCapacities
+  };
+};
+
+const normalizeWeeklyEntry = (entry: WeeklyEntry): WeeklyEntry => ({
+  ...entry,
+  projects: (entry.projects || []).map((project) => normalizeProject(project))
+});
+
+const normalizeDb = (source: Record<string, WeeklyEntry>): Record<string, WeeklyEntry> =>
+  Object.fromEntries(
+    Object.entries(source).map(([key, entry]) => [key, normalizeWeeklyEntry(entry)])
+  ) as Record<string, WeeklyEntry>;
+
 const getMatterTotals = (projects: Project[]) => {
   const totals = { Category1: 0, Category2: 0, Project: 0 } as Record<MatterType, number>;
-  for (const p of projects) totals[p.matterType] += 1;
+  for (const p of projects) totals[getProjectType(p)] += 1;
   return totals;
 };
 
@@ -509,15 +566,16 @@ function ListManager({
 export default function CapacityTrackerApp() {
   const [view, setView] = useState<'login' | 'employee' | 'management' | 'operations' | 'settings'>('login');
   const [currentUser, setCurrentUser] = useState<string>('');
+  const [showSaveModal, setShowSaveModal] = useState(false);
 
   const [db, setDb] = useState<Record<string, WeeklyEntry>>(() => {
     try {
       const raw = localStorage.getItem(STORAGE_KEY_DB);
-      if (raw) return JSON.parse(raw);
+      if (raw) return normalizeDb(JSON.parse(raw) as Record<string, WeeklyEntry>);
     } catch {
       // ignore
     }
-    return MOCK_DB;
+    return normalizeDb(MOCK_DB);
   });
 
   useEffect(() => {
@@ -566,7 +624,10 @@ export default function CapacityTrackerApp() {
   };
 
   const upsertEntry = (entry: WeeklyEntry) => {
-    const updatedEntry = { ...entry, lastUpdated: new Date().toISOString() };
+    const updatedEntry = {
+      ...normalizeWeeklyEntry(entry),
+      lastUpdated: new Date().toISOString()
+    };
     const key = `${updatedEntry.employeeName}-${updatedEntry.weekDate}`;
     setDb((prev) => ({ ...prev, [key]: updatedEntry }));
     return updatedEntry;
@@ -575,7 +636,7 @@ export default function CapacityTrackerApp() {
   // Explicit save (button)
   const handleSave = (entry: WeeklyEntry) => {
     upsertEntry(entry);
-    alert('Data saved successfully!');
+    setShowSaveModal(true);
   };
 
   // Auto-save (silent)
@@ -674,6 +735,20 @@ export default function CapacityTrackerApp() {
           />
         )}
       </main>
+
+      {showSaveModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4">
+          <div className="w-full max-w-md rounded-xl border border-slate-200 bg-white p-5 shadow-xl">
+            <h3 className="text-base font-bold text-[#133958]">Save Entry</h3>
+            <p className="mt-2 text-sm text-slate-600">Entry saved successfully.</p>
+            <div className="mt-5 flex justify-end gap-2">
+              <Button variant="secondary" onClick={() => setShowSaveModal(false)}>
+                Close
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -1245,13 +1320,7 @@ function LoginScreen({
           </Button>
 
           <div className="text-center mt-4">
-            <p className="text-xs text-[#94adae]">
-              {role === 'it'
-                ? 'Default: itpass123'
-                : role === 'management' || role === 'operations'
-                ? 'Default: admin123'
-                : 'Default: pass123'}
-            </p>
+            <p className="text-xs text-[#94adae]">Use your assigned credentials.</p>
           </div>
         </form>
       </Card>
@@ -1289,11 +1358,13 @@ function EmployeeForm({
     [offices, user, currentWeekStart]
   );
 
-  const [formData, setFormData] = useState<WeeklyEntry>(initialData || defaultData);
+  const [formData, setFormData] = useState<WeeklyEntry>(
+    normalizeWeeklyEntry(initialData || defaultData)
+  );
   const [projectPendingDelete, setProjectPendingDelete] = useState<{ id: string; name: string } | null>(null);
 
   useEffect(() => {
-    setFormData(initialData || defaultData);
+    setFormData(normalizeWeeklyEntry(initialData || defaultData));
   }, [initialData, defaultData]);
 
   useEffect(() => {
@@ -1340,7 +1411,7 @@ function EmployeeForm({
   const sortProjectsByType = (projects: Project[]) => {
     const order: Record<MatterType, number> = { Category1: 0, Category2: 1, Project: 2 };
     return [...projects].sort((a, b) => {
-      const t = order[a.matterType] - order[b.matterType];
+      const t = order[getProjectType(a)] - order[getProjectType(b)];
       if (t !== 0) return t;
       return (a.name || '').localeCompare(b.name || '');
     });
@@ -1348,13 +1419,13 @@ function EmployeeForm({
 
   const sortProjectsForSave = (projects: Project[]) => {
     const categoryOrder: Record<Project['category'], number> = {
-      'Category A': 0,
-      'Category B': 1,
-      'Category C': 2
+      'Category1': 0,
+      'Category2': 1,
+      'Project': 2
     };
 
     return [...projects].sort((a, b) => {
-      const categoryDiff = categoryOrder[a.category] - categoryOrder[b.category];
+      const categoryDiff = categoryOrder[getProjectType(a)] - categoryOrder[getProjectType(b)];
       if (categoryDiff !== 0) return categoryDiff;
 
       for (let weekIdx = 0; weekIdx < 4; weekIdx += 1) {
@@ -1380,7 +1451,7 @@ function EmployeeForm({
     const newProject: Project = {
       id: generatedId,
       name: '',
-      category: 'Category A',
+      category: 'Project',
       matterType: 'Project',
       owner: '',
       capacities: [0, 0, 0, 0]
@@ -1420,7 +1491,14 @@ function EmployeeForm({
   const updateProject = (id: string, field: keyof Project, value: any) => {
     setFormData({
       ...formData,
-      projects: formData.projects.map((p) => (p.id === id ? { ...p, [field]: value } : p))
+      projects: formData.projects.map((p) => {
+        if (p.id !== id) return p;
+        if (field === 'category') {
+          const nextType = getProjectType({ category: value, matterType: p.matterType });
+          return { ...p, category: nextType, matterType: nextType };
+        }
+        return { ...p, [field]: value };
+      })
     });
   };
 
@@ -1538,7 +1616,13 @@ function EmployeeForm({
                     {label}
                   </span>
                   <div className="flex items-center gap-1.5">
-                    <span className="text-2xl font-bold leading-none">{total}%</span>
+                    <span
+                      className="text-2xl font-bold leading-none cursor-help"
+                      title="2 hours = 5%"
+                      aria-label="2 hours = 5%"
+                    >
+                      {total}%
+                    </span>
                     {total > 100 && <AlertCircle size={16} />}
                   </div>
                 </div>
@@ -1588,7 +1672,7 @@ function EmployeeForm({
 
               <div>
                 <label className="block text-xs font-medium text-[#678b8c] mb-1">
-                  (S)LC / Mentor
+                  Mentor
                 </label>
                 <select
                   className={`w-full p-2 border border-slate-300 rounded-md text-sm bg-white focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none ${
@@ -1750,7 +1834,7 @@ function EmployeeForm({
                     <label className="text-xs font-medium text-[#678b8c] ml-1">Matter Name</label>
                     <input
                       type="text"
-                      placeholder="e.g. 2026-1234"
+                      placeholder="e.g. project"
                       className={`w-full p-2 border border-slate-300 rounded-md text-sm bg-white ${
                         readOnly ? 'bg-slate-50 text-slate-600' : ''
                       }`}
@@ -1853,14 +1937,16 @@ function EmployeeForm({
                         </label>
                         <div className="relative">
                           <input
-                            type="number"
-                            min="0"
-                            max="100"
+                            type="text"
+                            inputMode="numeric"
+                            pattern="[0-9]*"
                             className={`w-full p-1.5 border rounded-md text-sm text-center border-slate-200 text-slate-600 bg-white focus:border-blue-400 transition-colors ${
                               readOnly ? 'cursor-not-allowed' : ''
                             }`}
-                            value={project.capacities[idx]}
-                            onChange={(e) => updateCapacity(project.id, idx, Number(e.target.value))}
+                            value={String(normalizeCapacityInput(project.capacities[idx]))}
+                            onChange={(e) =>
+                              updateCapacity(project.id, idx, normalizeCapacityInput(e.target.value))
+                            }
                             readOnly={readOnly}
                           />
                         </div>

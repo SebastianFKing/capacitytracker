@@ -1,34 +1,48 @@
 <?xml version="1.0" encoding="UTF-8" standalone="no"?>
-<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">
-<svg width="100%" height="100%" viewBox="0 0 695 411" version="1.1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" xml:space="preserve" xmlns:serif="http://www.serif.com/" style="fill-rule:evenodd;clip-rule:evenodd;stroke-linecap:round;stroke-linejoin:round;stroke-miterlimit:1.5;" fill="#ffffff">
-	  <rect x="0" y="0" fill="#FFFFFF" width="695" height="411" rx="15"/>
-    <g transform="matrix(1,0,0,1,-5,-1720)">
-        <g id="Artboard1" transform="matrix(0.824576,0,0,0.749254,0.365685,430.856)">
-            <rect x="5.62" y="1720.57" width="842.425" height="547.24" style="fill:none;"/>
-            <g transform="matrix(1.21274,0,0,1.33466,-2183.71,393.157)">
-                <g transform="matrix(1,0,0,1,-22.3927,1.08043)">
-                    <path d="M1930.93,1121.75C1930.93,1121.75 1974.66,1080.73 2041.34,1094.1C2086.61,1103.18 2122.83,1145.4 2122.83,1145.4" style="fill:none;stroke:black;stroke-width:22.92px;"/>
-                </g>
-                <g transform="matrix(1,0,0,1,-47.3485,12.3935)">
-                    <path d="M2250.3,1107.1C2250.3,1107.1 2261.8,1065.58 2311.59,1047.05C2361.62,1028.44 2422.42,1051.13 2422.42,1051.13" style="fill:none;stroke:black;stroke-width:22.92px;"/>
-                </g>
-                <g transform="matrix(1.10085,0,0,1.10085,-212.096,-122.054)">
-                    <g transform="matrix(1,0,0,1,14.3186,-0.853887)">
-                        <ellipse cx="1981.62" cy="1247.49" rx="87.401" ry="87.881" style="fill:none;stroke:black;stroke-width:20.82px;"/>
-                    </g>
-                    <rect x="2083.34" y="1231.11" width="66.702" height="15.521" style="fill:none;stroke:black;stroke-width:20.82px;"/>
-                    <rect x="1892.23" y="1208.69" width="16.306" height="30.182" style="fill:none;stroke:black;stroke-width:20.82px;"/>
-                    <g transform="matrix(-1,0,0,1,4281.79,-0.853887)">
-                        <ellipse cx="1981.62" cy="1247.49" rx="87.401" ry="87.881" style="fill:none;stroke:black;stroke-width:20.82px;"/>
-                    </g>
-                    <g transform="matrix(-1,0,0,1,4296.11,0)">
-                        <rect x="2083.34" y="1231.11" width="66.702" height="15.521" style="fill:none;stroke:black;stroke-width:20.82px;"/>
-                    </g>
-                    <g transform="matrix(-1,0,0,1,4296.11,0)">
-                        <rect x="1892.23" y="1208.69" width="16.306" height="30.182" style="fill:none;stroke:black;stroke-width:20.82px;"/>
-                    </g>
-                </g>
-            </g>
-        </g>
-    </g>
+<!-- Created with Inkscape (http://www.inkscape.org/) -->
+
+<svg
+   width="23.433388"
+   height="23.599001"
+   viewBox="0 0 23.433388 23.599001"
+   version="1.1"
+   id="svg1"
+   xmlns:xlink="http://www.w3.org/1999/xlink"
+   xmlns="http://www.w3.org/2000/svg"
+   xmlns:svg="http://www.w3.org/2000/svg">
+  <defs
+     id="defs1">
+    <linearGradient
+       id="linearGradient18">
+      <stop
+         style="stop-color:#0066c3;stop-opacity:1;"
+         offset="0"
+         id="stop18" />
+      <stop
+         style="stop-color:#133958;stop-opacity:1;"
+         offset="1"
+         id="stop19" />
+    </linearGradient>
+    <radialGradient
+       xlink:href="#linearGradient18"
+       id="radialGradient19"
+       cx="16.493664"
+       cy="16.175072"
+       fx="16.493664"
+       fy="16.175072"
+       r="11.716694"
+       gradientTransform="matrix(0.20036203,-0.91230771,1.3000796,0.28551209,-7.8399284,26.605428)"
+       gradientUnits="userSpaceOnUse" />
+  </defs>
+  <g
+     id="layer1"
+     transform="translate(-4.2833061,-4.2004995)">
+    <ellipse
+       style="fill:url(#radialGradient19);fill-opacity:1;stroke-width:1108.35"
+       id="path1"
+       cx="16"
+       cy="16"
+       rx="11.716694"
+       ry="11.7995" />
+  </g>
 </svg>
