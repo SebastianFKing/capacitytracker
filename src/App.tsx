@@ -31,10 +31,11 @@ type Project = {
   category: MatterType;
   matterType?: MatterType; // legacy field kept for backward compatibility
   owner: string;
+  tasks?: string;
   capacities: [number, number, number, number]; // 4 weeks
 };
 
-type Availability2Weeks = 'With Capacity' | 'Limited Capacity' | 'No Capacity';
+type Availability2Weeks = 'With Capacity' | 'Limited Capacity' | 'No Capacity' | 'Over Capacity';
 
 type WeeklyEntry = {
   weekDate: string; // week commencing (Monday)
@@ -42,6 +43,7 @@ type WeeklyEntry = {
   office: string;
   mentor: string;
   languages: string[];
+  interests: string;
   annualLeave: boolean[][]; // 4 weeks x 5 days
   availability2Weeks: Availability2Weeks;
   capacityComments: string[];
@@ -67,7 +69,9 @@ const INITIAL_MENTORS = ['Mentor 1', 'Mentor 2', 'Mentor 3', 'Mentor 4'];
 const INITIAL_LANGUAGES = ['English', 'French', 'German', 'Dutch', 'Spanish', 'Mandarin', 'Arabic'];
 const PROJECT_CATEGORIES = ['Category1', 'Category2', 'Project'] as const;
 const WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'];
-const DEFAULT_WEEK_START = '2026-02-02';
+const HOURS_PER_WEEK = 40;
+const LEAVE_HOURS_PER_DAY = HOURS_PER_WEEK / WEEKDAYS.length;
+const COMMENT_WORD_LIMIT = 250;
 const IT_MASTER_PASSWORD = 'itpass123';
 const STORAGE_KEY_DB = 'capacity_tracker_db_v1';
 
@@ -93,6 +97,7 @@ const MOCK_DB: Record<string, WeeklyEntry> = {
     office: 'Office A',
     mentor: 'Mentor 2',
     languages: ['English', 'Spanish'],
+    interests: '',
     annualLeave: baseLeave,
     availability2Weeks: 'Limited Capacity',
     capacityComments: Array(4).fill(''),
@@ -104,6 +109,7 @@ const MOCK_DB: Record<string, WeeklyEntry> = {
         category: 'Category1',
         matterType: 'Category1',
         owner: 'Supervisor 1',
+        tasks: '',
         capacities: [25, 25, 20, 10]
       },
       {
@@ -112,6 +118,7 @@ const MOCK_DB: Record<string, WeeklyEntry> = {
         category: 'Category1',
         matterType: 'Category1',
         owner: 'Supervisor 2',
+        tasks: '',
         capacities: [20, 20, 15, 10]
       }
     ]
@@ -122,6 +129,7 @@ const MOCK_DB: Record<string, WeeklyEntry> = {
     office: 'Office E',
     mentor: 'Mentor 1',
     languages: ['French'],
+    interests: '',
     annualLeave: [
       [true, false, false, false, false],
       [false, false, false, false, false],
@@ -183,7 +191,7 @@ const formatDisplayDate = (dateStr: string) =>
 
 const clampCapacity = (value: number) => {
   if (!Number.isFinite(value)) return 0;
-  return Math.max(0, Math.round(value));
+  return Math.max(0, Math.round(value * 1000) / 1000);
 };
 
 const normalizeCapacityInput = (value: unknown) => {
@@ -197,6 +205,98 @@ const normalizeCapacityInput = (value: unknown) => {
     return clampCapacity(Number(withoutLeadingZeros));
   }
   return clampCapacity(Number(value));
+};
+
+const percentToHours = (percent: number) => {
+  if (!Number.isFinite(percent)) return 0;
+  return Math.max(0, (percent / 100) * HOURS_PER_WEEK);
+};
+
+const hoursToPercent = (hours: number) => {
+  if (!Number.isFinite(hours)) return 0;
+  return clampCapacity((hours / HOURS_PER_WEEK) * 100);
+};
+
+const normalizeHoursInput = (value: unknown) => {
+  if (typeof value === 'number') return Math.max(0, value);
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (trimmed === '') return 0;
+    const compact = trimmed.replace(/\s+/g, '');
+    if (compact.includes(':')) {
+      const [rawHours = '', rawMinutes = ''] = compact.split(':', 2);
+      const hoursDigits = rawHours.replace(/\D+/g, '');
+      const minuteDigits = rawMinutes.replace(/\D+/g, '');
+      if (hoursDigits === '' && minuteDigits === '') return 0;
+      const hoursValue = hoursDigits === '' ? 0 : Number(hoursDigits);
+      const minutesValue = minuteDigits === '' ? 0 : Number(minuteDigits);
+      if (!Number.isFinite(hoursValue) || !Number.isFinite(minutesValue)) return 0;
+      return Math.max(0, (hoursValue * 60 + minutesValue) / 60);
+    }
+    const numericValue = Number(compact);
+    if (Number.isFinite(numericValue)) return Math.max(0, numericValue);
+    const digitsOnly = compact.replace(/\D+/g, '');
+    if (digitsOnly === '') return 0;
+    return Math.max(0, Number(digitsOnly));
+  }
+  const fallbackValue = Number(value);
+  return Number.isFinite(fallbackValue) ? Math.max(0, fallbackValue) : 0;
+};
+
+const formatHoursInput = (hours: number) => {
+  if (!Number.isFinite(hours)) return '0:00';
+  const totalMinutes = Math.max(0, Math.round(hours * 60));
+  const wholeHours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  return `${wholeHours}:${String(minutes).padStart(2, '0')}`;
+};
+
+const limitToWordCount = (value: string, maxWords: number) => {
+  const wordsWithSpacing = value.match(/\S+\s*/g) || [];
+  if (wordsWithSpacing.length <= maxWords) return value;
+  return wordsWithSpacing.slice(0, maxWords).join('').trimEnd();
+};
+
+const clampWeekLoadPercent = (value: number) => {
+  if (!Number.isFinite(value)) return 0;
+  return Math.max(0, Math.min(100, Math.round(value)));
+};
+
+const formatLeaveDaySpans = (weekLeave: boolean[]) => {
+  const dayLabels = ['Mon', 'Tues', 'Wed', 'Thurs', 'Fri'];
+  const selectedIndexes = weekLeave
+    .map((isOff, idx) => (isOff ? idx : -1))
+    .filter((idx) => idx >= 0);
+
+  if (selectedIndexes.length === 0) return '-';
+
+  const segments: string[] = [];
+  let rangeStart = selectedIndexes[0];
+  let rangeEnd = selectedIndexes[0];
+
+  const flushRange = () => {
+    if (rangeStart === rangeEnd) {
+      segments.push(dayLabels[rangeStart] || WEEKDAYS[rangeStart] || `Day ${rangeStart + 1}`);
+      return;
+    }
+    const startLabel = dayLabels[rangeStart] || WEEKDAYS[rangeStart] || `Day ${rangeStart + 1}`;
+    const endLabel = dayLabels[rangeEnd] || WEEKDAYS[rangeEnd] || `Day ${rangeEnd + 1}`;
+    segments.push(`${startLabel}–${endLabel}`);
+  };
+
+  for (let i = 1; i < selectedIndexes.length; i += 1) {
+    const nextIdx = selectedIndexes[i];
+    if (nextIdx === rangeEnd + 1) {
+      rangeEnd = nextIdx;
+      continue;
+    }
+    flushRange();
+    rangeStart = nextIdx;
+    rangeEnd = nextIdx;
+  }
+  flushRange();
+
+  return segments.join(', ');
 };
 
 const getLatestEntryForEmployee = (employeeName: string, db: Record<string, WeeklyEntry>) => {
@@ -333,12 +433,14 @@ const normalizeProject = (project: Project): Project => {
     ...project,
     category: normalizedType,
     matterType: normalizedType,
+    tasks: typeof project.tasks === 'string' ? project.tasks : '',
     capacities: normalizedCapacities
   };
 };
 
 const normalizeWeeklyEntry = (entry: WeeklyEntry): WeeklyEntry => ({
   ...entry,
+  interests: typeof entry.interests === 'string' ? entry.interests : '',
   projects: (entry.projects || []).map((project) => normalizeProject(project))
 });
 
@@ -403,13 +505,28 @@ const Button = ({
   );
 };
 
-const Card = ({ children, className = '' }: { children: React.ReactNode; className?: string }) => (
-  <div className={`bg-white rounded-xl shadow-sm border border-[#94adae] ${className}`}>
+const Card = ({
+  children,
+  className = '',
+  style
+}: {
+  children: React.ReactNode;
+  className?: string;
+  style?: React.CSSProperties;
+}) => (
+  <div className={`bg-white rounded-xl shadow-sm border border-[#94adae] ${className}`} style={style}>
     {children}
   </div>
 );
 
-const MultiSelect = ({ options, value = [], onChange, placeholder, disabled }: any) => {
+const MultiSelect = ({
+  options,
+  value = [],
+  onChange,
+  placeholder,
+  disabled,
+  invalid = false
+}: any) => {
   const [isOpen, setIsOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -434,7 +551,11 @@ const MultiSelect = ({ options, value = [], onChange, placeholder, disabled }: a
   return (
     <div className="relative" ref={containerRef}>
       <div
-        className={`w-full p-2 border border-slate-300 rounded-md text-sm bg-white focus-within:ring-2 focus-within:ring-blue-500 focus-within:border-blue-500 flex justify-between items-center min-h-[38px] ${
+        className={`w-full p-2 border rounded-md text-sm bg-white focus-within:ring-2 flex justify-between items-center min-h-[38px] ${
+          invalid
+            ? 'border-red-400 focus-within:ring-red-500 focus-within:border-red-500'
+            : 'border-slate-300 focus-within:ring-blue-500 focus-within:border-blue-500'
+        } ${
           disabled ? 'bg-[#f5f8f8] cursor-not-allowed opacity-70' : 'cursor-pointer'
         }`}
         onClick={() => !disabled && setIsOpen(!isOpen)}
@@ -1347,6 +1468,7 @@ function EmployeeForm({
       office: offices[0],
       mentor: '',
       languages: ['English'],
+      interests: '',
       annualLeave: Array(4)
         .fill(null)
         .map(() => Array(5).fill(false)),
@@ -1362,9 +1484,18 @@ function EmployeeForm({
     normalizeWeeklyEntry(initialData || defaultData)
   );
   const [projectPendingDelete, setProjectPendingDelete] = useState<{ id: string; name: string } | null>(null);
+  const [profileValidationTouched, setProfileValidationTouched] = useState(false);
+  const [capacityInputDrafts, setCapacityInputDrafts] = useState<Record<string, string>>({});
+  const sidebarColumnRef = useRef<HTMLDivElement | null>(null);
+  const [mattersCardHeight, setMattersCardHeight] = useState<number | null>(null);
+  const [requiredFieldIssues, setRequiredFieldIssues] = useState<string[] | null>(null);
 
   useEffect(() => {
     setFormData(normalizeWeeklyEntry(initialData || defaultData));
+  }, [initialData, defaultData]);
+
+  useEffect(() => {
+    setCapacityInputDrafts({});
   }, [initialData, defaultData]);
 
   useEffect(() => {
@@ -1374,14 +1505,61 @@ function EmployeeForm({
     );
   }, [currentWeekStart, readOnly]);
 
+  useEffect(() => {
+    const sidebarEl = sidebarColumnRef.current;
+    if (!sidebarEl) return;
+
+    let rafId: number | null = null;
+    const syncMattersHeight = () => {
+      if (window.innerWidth < 1024) {
+        setMattersCardHeight(null);
+        return;
+      }
+      const nextHeight = Math.ceil(sidebarEl.getBoundingClientRect().height);
+      setMattersCardHeight((prev) => (prev === nextHeight ? prev : nextHeight));
+    };
+
+    const scheduleSync = () => {
+      if (rafId !== null) window.cancelAnimationFrame(rafId);
+      rafId = window.requestAnimationFrame(syncMattersHeight);
+    };
+
+    scheduleSync();
+    const resizeObserver = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(scheduleSync) : null;
+    resizeObserver?.observe(sidebarEl);
+    window.addEventListener('resize', scheduleSync);
+
+    return () => {
+      if (rafId !== null) window.cancelAnimationFrame(rafId);
+      resizeObserver?.disconnect();
+      window.removeEventListener('resize', scheduleSync);
+    };
+  }, []);
+
+  const hasOfficeSelected = !!formData.office && formData.office.trim() !== '';
+  const hasMentorSelected =
+    !!formData.mentor && formData.mentor.trim() !== '' && formData.mentor !== 'Select Mentor';
+  const hasLanguagesSelected = Array.isArray(formData.languages) && formData.languages.length > 0;
+  const isMatterNameValid = (project: Project) => !!project.name && project.name.trim() !== '';
+  const isMatterCategoryValid = (project: Project) => !!project.category && project.category.trim() !== '';
+  const isMatterSupervisorValid = (project: Project) => !!project.owner && project.owner.trim() !== '';
+  const areMattersValid = formData.projects.every(
+    (project) =>
+      isMatterNameValid(project) &&
+      isMatterCategoryValid(project) &&
+      isMatterSupervisorValid(project)
+  );
+  const isProfileValid = hasOfficeSelected && hasMentorSelected && hasLanguagesSelected;
+  const isFormValidForSave = isProfileValid && areMattersValid;
+
   // Silent autosave (debounced)
   useEffect(() => {
-    if (readOnly) return;
+    if (readOnly || !isFormValidForSave) return;
     const t = window.setTimeout(() => {
       onAutoSave?.(formData);
     }, 900);
     return () => window.clearTimeout(t);
-  }, [formData, readOnly, onAutoSave]);
+  }, [formData, readOnly, onAutoSave, isFormValidForSave]);
 
   const weekCommencingDate = readOnly ? formData.weekDate : currentWeekStart;
   const weekLabels = getWeekLabels(weekCommencingDate);
@@ -1389,32 +1567,25 @@ function EmployeeForm({
 
   // Weekly totals: project capacities + leave
   const weeklyTotals = [0, 1, 2, 3].map((i) => {
-    const projectSum = formData.projects.reduce((sum, p) => sum + (p.capacities[i] || 0), 0);
+    const projectSumPct = formData.projects.reduce((sum, p) => sum + (p.capacities[i] || 0), 0);
     const leaveCount = (formData.annualLeave[i] || []).filter(Boolean).length;
-    const leavePct = (leaveCount / 5) * 100;
-    return Math.round(projectSum + leavePct);
+    const projectHours = (projectSumPct / 100) * HOURS_PER_WEEK;
+    const leaveHours = leaveCount * LEAVE_HOURS_PER_DAY;
+    return Math.max(0, Math.round((projectHours + leaveHours) * 60) / 60);
   });
 
-  const getStatusColor = (pct: number) => {
-    if (pct >= 80) return 'text-red-600 bg-red-50 border-red-200';
-    if (pct >= 60) return 'text-orange-600 bg-orange-50 border-orange-200';
-    if (pct >= 40) return 'text-blue-600 bg-blue-50 border-blue-200';
+  const getStatusColor = (hours: number) => {
+    if (hours > HOURS_PER_WEEK) return 'text-red-600 bg-red-50 border-red-200';
+    if (hours >= 32) return 'text-orange-600 bg-orange-50 border-orange-200';
+    if (hours >= 16) return 'text-blue-600 bg-blue-50 border-blue-200';
     return 'text-green-600 bg-green-50 border-green-200';
   };
 
   const availabilitySelectClasses: Record<Availability2Weeks, string> = {
     'With Capacity': 'bg-emerald-50 text-emerald-700 border-emerald-300',
     'Limited Capacity': 'bg-amber-50 text-amber-700 border-amber-300',
-    'No Capacity': 'bg-red-50 text-red-700 border-red-300'
-  };
-
-  const sortProjectsByType = (projects: Project[]) => {
-    const order: Record<MatterType, number> = { Category1: 0, Category2: 1, Project: 2 };
-    return [...projects].sort((a, b) => {
-      const t = order[getProjectType(a)] - order[getProjectType(b)];
-      if (t !== 0) return t;
-      return (a.name || '').localeCompare(b.name || '');
-    });
+    'No Capacity': 'bg-red-50 text-red-700 border-red-300',
+    'Over Capacity': 'bg-red-100 text-red-800 border-red-400'
   };
 
   const sortProjectsForSave = (projects: Project[]) => {
@@ -1454,12 +1625,13 @@ function EmployeeForm({
       category: 'Project',
       matterType: 'Project',
       owner: '',
+      tasks: '',
       capacities: [0, 0, 0, 0]
     };
 
     setFormData((prev) => ({
       ...prev,
-      projects: sortProjectsByType([...prev.projects, newProject])
+      projects: [newProject, ...prev.projects]
     }));
   };
 
@@ -1481,9 +1653,39 @@ function EmployeeForm({
     setProjectPendingDelete(null);
   };
 
+  const dismissRequiredFieldsModal = () => {
+    setRequiredFieldIssues(null);
+  };
+
+  const getRequiredFieldIssues = () => {
+    const issues: string[] = [];
+
+    if (!hasOfficeSelected) issues.push('Office is required.');
+    if (!hasMentorSelected) issues.push('Mentor is required.');
+    if (!hasLanguagesSelected) issues.push('Working Language(s) is required.');
+
+    formData.projects.forEach((project, index) => {
+      const matterLabel = `Matter ${index + 1}`;
+      if (!isMatterNameValid(project)) issues.push(`${matterLabel}: Matter Name is required.`);
+      if (!isMatterCategoryValid(project)) issues.push(`${matterLabel}: Category is required.`);
+      if (!isMatterSupervisorValid(project)) issues.push(`${matterLabel}: Supervisor is required.`);
+    });
+
+    return issues;
+  };
+
   const handleSaveEntry = () => {
+    const issues = getRequiredFieldIssues();
+    if (issues.length > 0) {
+      setProfileValidationTouched(true);
+      setRequiredFieldIssues(issues);
+      return;
+    }
+
     const sortedProjects = sortProjectsForSave(formData.projects);
     const nextData = { ...formData, projects: sortedProjects };
+    setProfileValidationTouched(false);
+    setRequiredFieldIssues(null);
     setFormData(nextData);
     onSave(nextData);
   };
@@ -1496,6 +1698,9 @@ function EmployeeForm({
         if (field === 'category') {
           const nextType = getProjectType({ category: value, matterType: p.matterType });
           return { ...p, category: nextType, matterType: nextType };
+        }
+        if (field === 'tasks' && typeof value === 'string') {
+          return { ...p, tasks: limitToWordCount(value, COMMENT_WORD_LIMIT) };
         }
         return { ...p, [field]: value };
       })
@@ -1511,6 +1716,28 @@ function EmployeeForm({
         newCapacities[index] = clampCapacity(value);
         return { ...p, capacities: newCapacities };
       })
+    });
+  };
+
+  const getCapacityInputKey = (projectId: string, weekIndex: number) => `${projectId}-${weekIndex}`;
+
+  const getCapacityInputValue = (projectId: string, weekIndex: number, capacityPercent: number) => {
+    const inputKey = getCapacityInputKey(projectId, weekIndex);
+    return capacityInputDrafts[inputKey] ?? formatHoursInput(percentToHours(capacityPercent));
+  };
+
+  const handleCapacityInputChange = (projectId: string, weekIndex: number, rawValue: string) => {
+    const inputKey = getCapacityInputKey(projectId, weekIndex);
+    setCapacityInputDrafts((prev) => ({ ...prev, [inputKey]: rawValue }));
+    updateCapacity(projectId, weekIndex, hoursToPercent(normalizeHoursInput(rawValue)));
+  };
+
+  const handleCapacityInputBlur = (projectId: string, weekIndex: number) => {
+    const inputKey = getCapacityInputKey(projectId, weekIndex);
+    setCapacityInputDrafts((prev) => {
+      if (!(inputKey in prev)) return prev;
+      const { [inputKey]: _removed, ...rest } = prev;
+      return rest;
     });
   };
 
@@ -1530,7 +1757,7 @@ function EmployeeForm({
   const updateCapacityComment = (weekIndex: number, value: string) => {
     if (readOnly) return;
     const nextComments = [...(formData.capacityComments || Array(4).fill(''))];
-    nextComments[weekIndex] = value;
+    nextComments[weekIndex] = limitToWordCount(value, COMMENT_WORD_LIMIT);
     setFormData({ ...formData, capacityComments: nextComments });
   };
 
@@ -1579,6 +1806,10 @@ function EmployeeForm({
                 {formatDisplayDate(weekCommencingDate)}
               </span>
             </p>
+            <p className="text-[11px] leading-snug text-[#94adae]">
+              This information if for planning purposes only and to signal your expected capacity over
+              the coming weeks.
+            </p>
           </div>
         </div>
 
@@ -1601,11 +1832,11 @@ function EmployeeForm({
               )}
             </div>
           </div>
-
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3 w-full">
             {weeklyTotals.map((total, idx) => {
               const label = weekLabels[idx].replace(/ \d{4}$/, '');
               const colorClass = getStatusColor(total);
+              const totalLabel = `${formatHoursInput(total)} ${total > 1 ? 'hrs' : 'hr'}`;
 
               return (
                 <div
@@ -1618,12 +1849,12 @@ function EmployeeForm({
                   <div className="flex items-center gap-1.5">
                     <span
                       className="text-2xl font-bold leading-none cursor-help"
-                      title="2 hours = 5%"
-                      aria-label="2 hours = 5%"
+                      title="40 hours = 100%"
+                      aria-label="40 hours = 100%"
                     >
-                      {total}%
+                      {total > HOURS_PER_WEEK ? 'Over 40' : totalLabel}
                     </span>
-                    {total > 100 && <AlertCircle size={16} />}
+                    {total > HOURS_PER_WEEK && <AlertCircle size={16} />}
                   </div>
                 </div>
               );
@@ -1632,9 +1863,9 @@ function EmployeeForm({
         </div>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 lg:items-stretch">
         {/* Sidebar */}
-        <div className="space-y-6 h-fit lg:col-span-1">
+        <div ref={sidebarColumnRef} className="space-y-6 h-fit lg:col-span-1">
           {/* Profile Card */}
           <Card className="p-6 space-y-4">
             <h3 className="font-semibold text-[#133958] flex items-center gap-2">
@@ -1655,9 +1886,15 @@ function EmployeeForm({
               </div>
 
               <div>
-                <label className="block text-xs font-medium text-[#678b8c] mb-1">Office</label>
+                <label className="block text-xs font-medium text-[#678b8c] mb-1">
+                  Office <span className="text-red-500">*</span>
+                </label>
                 <select
-                  className={`w-full p-2 border border-slate-300 rounded-md text-sm bg-white focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none ${
+                  className={`w-full p-2 border rounded-md text-sm bg-white focus:ring-2 outline-none ${
+                    profileValidationTouched && !hasOfficeSelected
+                      ? 'border-red-400 focus:ring-red-500 focus:border-red-500'
+                      : 'border-slate-300 focus:ring-blue-500 focus:border-blue-500'
+                  } ${
                     readOnly ? 'bg-[#f5f8f8] text-slate-500 cursor-not-allowed' : ''
                   }`}
                   value={formData.office}
@@ -1672,10 +1909,14 @@ function EmployeeForm({
 
               <div>
                 <label className="block text-xs font-medium text-[#678b8c] mb-1">
-                  Mentor
+                  Mentor <span className="text-red-500">*</span>
                 </label>
                 <select
-                  className={`w-full p-2 border border-slate-300 rounded-md text-sm bg-white focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none ${
+                  className={`w-full p-2 border rounded-md text-sm bg-white focus:ring-2 outline-none ${
+                    profileValidationTouched && !hasMentorSelected
+                      ? 'border-red-400 focus:ring-red-500 focus:border-red-500'
+                      : 'border-slate-300 focus:ring-blue-500 focus:border-blue-500'
+                  } ${
                     readOnly ? 'bg-[#f5f8f8] text-slate-500 cursor-not-allowed' : ''
                   }`}
                   value={formData.mentor}
@@ -1691,7 +1932,7 @@ function EmployeeForm({
 
               <div>
                 <label className="block text-xs font-medium text-[#678b8c] mb-1">
-                  Working Language(s)
+                  Working Language(s) <span className="text-red-500">*</span>
                 </label>
                 <MultiSelect
                   options={languages}
@@ -1699,6 +1940,27 @@ function EmployeeForm({
                   onChange={(val: string[]) => setFormData({ ...formData, languages: val })}
                   placeholder="Select Languages"
                   disabled={readOnly}
+                  invalid={profileValidationTouched && !hasLanguagesSelected}
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-medium text-[#678b8c] mb-1">
+                  Interests
+                </label>
+                <textarea
+                  className={`w-full h-24 min-h-24 max-h-24 resize-none overflow-y-auto p-2 border border-slate-300 rounded-md text-xs bg-white ${
+                    readOnly ? 'bg-[#f5f8f8] text-slate-500 cursor-not-allowed' : ''
+                  }`}
+                  value={formData.interests || ''}
+                  onChange={(e) =>
+                    setFormData({
+                      ...formData,
+                      interests: limitToWordCount(e.target.value, COMMENT_WORD_LIMIT)
+                    })
+                  }
+                  disabled={readOnly}
+                  placeholder="Share your interests, preferred work areas, or goals..."
                 />
               </div>
             </div>
@@ -1727,12 +1989,12 @@ function EmployeeForm({
                 <option className="text-slate-900 bg-white">With Capacity</option>
                 <option className="text-slate-900 bg-white">Limited Capacity</option>
                 <option className="text-slate-900 bg-white">No Capacity</option>
+                <option className="text-slate-900 bg-white">Over Capacity</option>
               </select>
             </div>
 
             <div className="space-y-4">
               {weekLabels.map((dateStr, weekIdx) => {
-                const days = formData.annualLeave[weekIdx] || [false, false, false, false, false];
                 const extraHighlight = weekIdx < 2 ? 'ring-1 ring-blue-200 bg-blue-50/30' : '';
 
                 return (
@@ -1743,8 +2005,44 @@ function EmployeeForm({
                     <div className="text-xs font-bold text-slate-700 mb-2 text-center">
                       Week of {dateStr.replace(/ \d{4}$/, '')}
                     </div>
-                    <div className="block text-[10px] font-semibold text-[#678b8c] mb-1 uppercase tracking-wide">
-                      Annual Leave
+                    <div className="mt-1">
+                      <label className="block text-[10px] font-semibold text-[#678b8c] mb-1 uppercase tracking-wide">
+                        Comments
+                      </label>
+                      <textarea
+                        className={`w-full h-24 min-h-24 max-h-24 resize-none overflow-y-auto p-2 border border-slate-300 rounded-md text-xs bg-white ${
+                          readOnly ? 'bg-[#f5f8f8] text-slate-500 cursor-not-allowed' : ''
+                        }`}
+                        value={capacityComments[weekIdx] || ''}
+                        onChange={(e) => updateCapacityComment(weekIdx, e.target.value)}
+                        disabled={readOnly}
+                        placeholder="Any relevant notes regarding your capacity or workload this week..."
+                      />
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </Card>
+
+          {/* Annual Leave Card */}
+          <Card className="p-6 space-y-4">
+            <h3 className="font-semibold text-[#133958] flex items-center gap-2">
+              <CalendarDays size={18} className="text-[#678b8c]" /> Annual Leave
+            </h3>
+
+            <div className="space-y-4">
+              {weekLabels.map((dateStr, weekIdx) => {
+                const days = formData.annualLeave[weekIdx] || [false, false, false, false, false];
+                const extraHighlight = weekIdx < 2 ? 'ring-1 ring-blue-200 bg-blue-50/30' : '';
+
+                return (
+                  <div
+                    key={`annual-leave-week-${weekIdx}`}
+                    className={`bg-[#f5f8f8] p-3 rounded-md border border-slate-200 ${extraHighlight}`}
+                  >
+                    <div className="text-xs font-bold text-slate-700 mb-2 text-center">
+                      Week of {dateStr.replace(/ \d{4}$/, '')}
                     </div>
                     <div className="flex justify-between">
                       {WEEKDAYS.map((dayName, dayIdx) => (
@@ -1777,20 +2075,6 @@ function EmployeeForm({
                         </label>
                       ))}
                     </div>
-                    <div className="mt-3">
-                      <label className="block text-[10px] font-semibold text-[#678b8c] mb-1 uppercase tracking-wide">
-                        Comments
-                      </label>
-                      <textarea
-                        className={`w-full p-2 border border-slate-300 rounded-md text-xs bg-white min-h-[70px] ${
-                          readOnly ? 'bg-[#f5f8f8] text-slate-500 cursor-not-allowed' : ''
-                        }`}
-                        value={capacityComments[weekIdx] || ''}
-                        onChange={(e) => updateCapacityComment(weekIdx, e.target.value)}
-                        disabled={readOnly}
-                        placeholder="Any relevant notes regarding your capacity or workload this week..."
-                      />
-                    </div>
                   </div>
                 );
               })}
@@ -1799,7 +2083,10 @@ function EmployeeForm({
         </div>
 
         {/* Matters List */}
-        <Card className="p-6 lg:col-span-2 flex flex-col h-full">
+        <Card
+          className="p-6 lg:col-span-2 flex flex-col h-full min-h-0 overflow-hidden"
+          style={mattersCardHeight ? { height: mattersCardHeight } : undefined}
+        >
           <div className="flex items-center justify-between mb-4">
             <div className="flex items-center gap-3">
               <h3 className="font-semibold text-[#133958]">Matters</h3>
@@ -1816,7 +2103,7 @@ function EmployeeForm({
             </div>
           </div>
 
-          <div className="flex-1 space-y-4">
+          <div className="flex-1 min-h-0 overflow-y-auto pr-1 space-y-4">
             {formData.projects.length === 0 && (
               <div className="text-center py-10 text-slate-400 border-2 border-dashed border-slate-200 rounded-lg bg-[#f5f8f8]">
                 No matters added yet.
@@ -1831,12 +2118,18 @@ function EmployeeForm({
                 {/* Row 1: Basic Info */}
                 <div className="grid grid-cols-12 gap-4 items-end">
                   <div className="col-span-12 md:col-span-4">
-                    <label className="text-xs font-medium text-[#678b8c] ml-1">Matter Name</label>
+                    <label className="text-xs font-medium text-[#678b8c] ml-1">
+                      Matter Name <span className="text-red-500">*</span>
+                    </label>
                     <input
                       type="text"
                       placeholder="e.g. project"
-                      className={`w-full p-2 border border-slate-300 rounded-md text-sm bg-white ${
-                        readOnly ? 'bg-slate-50 text-slate-600' : ''
+                      className={`w-full p-2 border rounded-md text-sm bg-white ${
+                        profileValidationTouched && !isMatterNameValid(project)
+                          ? 'border-red-400 focus:ring-2 focus:ring-red-500 focus:border-red-500'
+                          : 'border-slate-300 focus:ring-2 focus:ring-blue-500 focus:border-blue-500'
+                      } ${
+                        readOnly ? 'bg-slate-50 text-slate-600 cursor-not-allowed' : ''
                       }`}
                       value={project.name}
                       onChange={(e) => updateProject(project.id, 'name', e.target.value)}
@@ -1845,9 +2138,15 @@ function EmployeeForm({
                   </div>
 
                   <div className="col-span-12 md:col-span-3">
-                    <label className="text-xs font-medium text-[#678b8c] ml-1">Category</label>
+                    <label className="text-xs font-medium text-[#678b8c] ml-1">
+                      Category <span className="text-red-500">*</span>
+                    </label>
                     <select
-                      className={`w-full p-2 border border-slate-300 rounded-md text-sm bg-white ${
+                      className={`w-full p-2 border rounded-md text-sm bg-white focus:ring-2 outline-none ${
+                        profileValidationTouched && !isMatterCategoryValid(project)
+                          ? 'border-red-400 focus:ring-red-500 focus:border-red-500'
+                          : 'border-slate-300 focus:ring-blue-500 focus:border-blue-500'
+                      } ${
                         readOnly ? 'bg-slate-50 text-slate-600 cursor-not-allowed' : ''
                       }`}
                       value={project.category}
@@ -1863,9 +2162,15 @@ function EmployeeForm({
                   </div>
 
                   <div className="col-span-12 md:col-span-3">
-                    <label className="text-xs font-medium text-[#678b8c] ml-1">Supervisor</label>
+                    <label className="text-xs font-medium text-[#678b8c] ml-1">
+                      Supervisor <span className="text-red-500">*</span>
+                    </label>
                     <select
-                      className={`w-full p-2 border border-slate-300 rounded-md text-sm bg-white focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none ${
+                      className={`w-full p-2 border rounded-md text-sm bg-white focus:ring-2 outline-none ${
+                        profileValidationTouched && !isMatterSupervisorValid(project)
+                          ? 'border-red-400 focus:ring-red-500 focus:border-red-500'
+                          : 'border-slate-300 focus:ring-blue-500 focus:border-blue-500'
+                      } ${
                         readOnly ? 'bg-slate-50 text-slate-600 cursor-not-allowed' : ''
                       }`}
                       value={project.owner}
@@ -1924,7 +2229,7 @@ function EmployeeForm({
                 {/* Row 2: Capacity Forecast */}
                 <div className="rounded-md border border-slate-300 pt-3 pb-3 px-3 mt-2 bg-[#f8fafc]">
                   <span className="block mb-2 text-xs font-bold text-[#678b8c]">
-                    Workload Forecast (%)
+                    Workload Forecast (Hours)
                   </span>
                   <div className="grid grid-cols-4 gap-3">
                     {weekLabels.map((dateStr, idx) => (
@@ -1938,20 +2243,41 @@ function EmployeeForm({
                         <div className="relative">
                           <input
                             type="text"
-                            inputMode="numeric"
-                            pattern="[0-9]*"
-                            className={`w-full p-1.5 border rounded-md text-sm text-center border-slate-200 text-slate-600 bg-white focus:border-blue-400 transition-colors ${
+                            inputMode="text"
+                            pattern="[0-9:]*"
+                            className={`w-full py-1.5 pl-10 pr-10 border rounded-md text-sm text-center border-slate-200 text-slate-600 bg-white focus:border-blue-400 transition-colors ${
                               readOnly ? 'cursor-not-allowed' : ''
                             }`}
-                            value={String(normalizeCapacityInput(project.capacities[idx]))}
-                            onChange={(e) =>
-                              updateCapacity(project.id, idx, normalizeCapacityInput(e.target.value))
-                            }
+                            value={getCapacityInputValue(project.id, idx, project.capacities[idx] || 0)}
+                            onChange={(e) => handleCapacityInputChange(project.id, idx, e.target.value)}
+                            onBlur={() => handleCapacityInputBlur(project.id, idx)}
                             readOnly={readOnly}
+                            placeholder="0:00"
+                            title="Enter hours as H:MM (e.g., 5:45)"
                           />
+                          <span
+                            aria-hidden="true"
+                            className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-xs font-medium text-slate-400"
+                          >
+                            hrs
+                          </span>
                         </div>
                       </div>
                     ))}
+                  </div>
+                  <div className="mt-3">
+                    <label className="block text-[10px] font-semibold text-[#678b8c] mb-1 uppercase tracking-wide">
+                      Tasks
+                    </label>
+                    <textarea
+                      className={`w-full h-24 min-h-24 max-h-24 resize-none overflow-y-auto p-2 border border-slate-300 rounded-md text-xs bg-white ${
+                        readOnly ? 'bg-slate-50 text-slate-600 cursor-not-allowed' : ''
+                      }`}
+                      value={project.tasks || ''}
+                      onChange={(e) => updateProject(project.id, 'tasks', e.target.value)}
+                      readOnly={readOnly}
+                      placeholder="Add task notes for this matter..."
+                    />
                   </div>
                 </div>
               </div>
@@ -1959,6 +2285,29 @@ function EmployeeForm({
           </div>
         </Card>
       </div>
+
+      {requiredFieldIssues && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4">
+          <div className="w-full max-w-lg rounded-xl border border-slate-200 bg-white p-5 shadow-xl">
+            <h3 className="text-base font-bold text-[#133958]">Required Fields Missing</h3>
+            <p className="mt-2 text-sm text-slate-600">
+              Complete the required fields before saving.
+            </p>
+            <div className="mt-3 max-h-56 overflow-y-auto rounded-md border border-slate-200 bg-[#f8fafc] p-3">
+              <ul className="list-disc pl-5 space-y-1 text-sm text-slate-700">
+                {requiredFieldIssues.map((issue, idx) => (
+                  <li key={`${issue}-${idx}`}>{issue}</li>
+                ))}
+              </ul>
+            </div>
+            <div className="mt-5 flex justify-end gap-2">
+              <Button variant="secondary" onClick={dismissRequiredFieldsModal}>
+                OK
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {projectPendingDelete && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4">
@@ -2014,19 +2363,24 @@ function TeamEmployeeProfile({ entry, onBack }: { entry: WeeklyEntry; onBack: ()
     );
     const leaveCount = (entry.annualLeave[weekIdx] || []).filter(Boolean).length;
     const leaveLoad = (leaveCount / WEEKDAYS.length) * 100;
-    return Math.round(projectLoad + leaveLoad);
+    return clampWeekLoadPercent(projectLoad + leaveLoad);
   });
   const comments = entry.capacityComments || Array(4).fill('');
+  const interestsText = entry.interests?.trim() ? entry.interests : '-';
+  const annualLeaveByWeek = weekLabels.map((label, weekIdx) => {
+    const weekLeave = entry.annualLeave[weekIdx] || [];
+    return {
+      weekIdx,
+      weekLabel: label.replace(/ \d{4}$/, ''),
+      leaveLabel: formatLeaveDaySpans(weekLeave)
+    };
+  });
 
   return (
     <div className="space-y-6">
-      <button
-        onClick={onBack}
-        className="flex items-center text-xs text-[#678b8c] hover:text-[#133958] group transition-colors"
-      >
-        <ArrowLeft size={14} className="mr-1 group-hover:-translate-x-1 transition-transform" />
+      <Button variant="secondary" onClick={onBack} icon={ArrowLeft} className="w-fit">
         Back to Team Dashboard
-      </button>
+      </Button>
 
       <Card className="p-6">
         <h2 className="text-2xl font-bold text-[#133958]">Employee Profile</h2>
@@ -2048,6 +2402,12 @@ function TeamEmployeeProfile({ entry, onBack }: { entry: WeeklyEntry; onBack: ()
           <div>
             <p className="text-xs uppercase tracking-wide text-[#678b8c]">Status</p>
             <p className="text-base font-semibold text-slate-800">{entry.availability2Weeks}</p>
+          </div>
+          <div className="md:col-span-2">
+            <p className="text-xs uppercase tracking-wide text-[#678b8c]">Interests</p>
+            <p className="text-base font-semibold text-slate-800 whitespace-pre-wrap break-words">
+              {interestsText}
+            </p>
           </div>
         </div>
       </Card>
@@ -2090,6 +2450,25 @@ function TeamEmployeeProfile({ entry, onBack }: { entry: WeeklyEntry; onBack: ()
               ))}
             </tbody>
           </table>
+        </div>
+      </Card>
+
+      <Card className="p-6">
+        <h3 className="text-lg font-semibold text-[#133958]">Annual Leave by Week</h3>
+        <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
+          {annualLeaveByWeek.map((week) => (
+            <div
+              key={`profile-annual-leave-${week.weekIdx}`}
+              className="rounded-lg border border-[#94adae] bg-[#f5f8f8] p-3"
+            >
+              <p className="text-xs font-bold uppercase tracking-wide text-[#678b8c]">
+                Week {week.weekIdx + 1} ({week.weekLabel})
+              </p>
+              <p className="mt-2 text-sm font-semibold text-slate-700 break-words">
+                {week.leaveLabel}
+              </p>
+            </div>
+          ))}
         </div>
       </Card>
     </div>
@@ -2159,9 +2538,9 @@ function Dashboard({
     return Array.from(byEmployee.values());
   }, [db]);
 
-  const referenceWeekDate = latestEntries[0]?.weekDate || DEFAULT_WEEK_START;
+  const referenceWeekDate = getCurrentWeekStart();
   const weekLabels = getWeekLabels(referenceWeekDate);
-  const relativeWeekLabels = ['This week', 'Next week', 'In two weeks', 'In three weeks'];
+  const relativeWeekLabels = ['This week', 'Next week', 'Week 3', 'Week 4'];
   const spanStartDate = parseIsoDateLocal(referenceWeekDate);
   const spanEndDate = new Date(spanStartDate);
   spanEndDate.setDate(spanStartDate.getDate() + 25);
@@ -2186,14 +2565,14 @@ function Dashboard({
 
   const tableData = useMemo<DashboardEntry[]>(() => {
     return latestEntries.map((entry) => {
-      const weeklyLoads = Array.from({ length: 4 }).map((_, weekIdx) => {
+      const weeklyLoads = Array.from({ length: 4 }).map((_, weekIdx) => { 
         const projectLoad = entry.projects.reduce(
           (acc, project) => acc + (project.capacities[weekIdx] || 0),
           0
         );
         const leaveCount = (entry.annualLeave[weekIdx] || []).filter(Boolean).length;
         const leaveLoad = (leaveCount / WEEKDAYS.length) * 100;
-        return Math.round(projectLoad + leaveLoad);
+        return clampWeekLoadPercent(projectLoad + leaveLoad);
       });
 
       const averageLoad = Math.round(
@@ -2224,15 +2603,15 @@ function Dashboard({
       const weekLoads = filteredData.map((entry) => entry.weeklyLoads[weekIdx] || 0);
       const totalLoad = weekLoads.reduce((acc, load) => acc + load, 0);
       const avgLoad = weekLoads.length > 0 ? Math.round(totalLoad / weekLoads.length) : 0;
-      const overCap = weekLoads.filter((load) => load >= 100).length;
-      const atCapacity = weekLoads.filter((load) => load >= 80 && load < 100).length;
+      const withCapacity = weekLoads.filter((load) => load < 80).length;
+      const atOrOverCapacity = weekLoads.filter((load) => load >= 80).length;
       const totalLeaveDays = filteredData.reduce(
         (acc, entry) => acc + (entry.annualLeave[weekIdx] || []).filter(Boolean).length,
         0
       );
       const avgLeaveDays = weekLoads.length > 0 ? totalLeaveDays / weekLoads.length : 0;
 
-      return { avgLoad, overCap, atCapacity, avgLeaveDays: avgLeaveDays.toFixed(1) };
+      return { avgLoad, withCapacity, atOrOverCapacity, avgLeaveDays: avgLeaveDays.toFixed(1) };
     });
   }, [filteredData]);
 
@@ -2344,8 +2723,7 @@ function Dashboard({
   };
 
   const getWeekLeaveDaysLabel = (weekLeave: boolean[]) => {
-    const offDays = WEEKDAYS.filter((_, dayIdx) => weekLeave[dayIdx]);
-    return offDays.length === 0 ? '-' : offDays.join(', ');
+    return formatLeaveDaySpans(weekLeave);
   };
 
   if (selectedEntry) {
@@ -2410,7 +2788,8 @@ function Dashboard({
               </div>
               <p className="mt-1 text-xs text-[#678b8c]">{shortLabel}</p>
               <p className="mt-3 text-xs text-slate-600">
-                {summary.atCapacity} at capacity | {summary.overCap} over capacity
+                {summary.withCapacity} with capacity | {summary.atOrOverCapacity} at or over
+                {' '}capacity
               </p>
               {!weekDrivenTable && (
                 <p className="mt-1 text-xs text-slate-500">
@@ -2518,12 +2897,10 @@ function Dashboard({
         <Card className="overflow-hidden">
           <div className="pb-2 overflow-x-auto">
             <table
-              className={`w-full table-fixed text-sm text-slate-600 ${
-                activeWeek !== null ? 'min-w-[1150px]' : 'min-w-[920px]'
-              }`}
+              className="w-full table-fixed text-sm text-slate-600 min-w-[1150px]"
             >
               <thead className="bg-[#f5f8f8] border-b border-[#94adae] uppercase text-xs font-semibold text-[#133958] text-left">
-                <tr className="text-left">
+                <tr className="text-left h-14">
                   <th
                     className="px-4 py-2 cursor-pointer hover:bg-slate-100 select-none"
                     onClick={() => requestSort('employeeName')}
@@ -2532,25 +2909,21 @@ function Dashboard({
                       Employee {getSortIcon('employeeName')}
                     </div>
                   </th>
-                  {activeWeek !== null && (
-                    <>
-                      <th
-                        className="px-4 py-2 cursor-pointer hover:bg-slate-100 select-none"
-                        onClick={() => requestSort('office')}
-                      >
-                        <div className="flex items-center justify-start gap-1">
-                          Office {getSortIcon('office')}
-                        </div>
-                      </th>
-                      <th className="px-4 py-2">Languages</th>
-                    </>
-                  )}
+                  <th
+                    className="px-4 py-2 cursor-pointer hover:bg-slate-100 select-none"
+                    onClick={() => requestSort('office')}
+                  >
+                    <div className="flex items-center justify-start gap-1">
+                      Office {getSortIcon('office')}
+                    </div>
+                  </th>
+                  {activeWeek !== null && <th className="px-4 py-2">Languages</th>}
                   <th
                     className="px-4 py-2 cursor-pointer hover:bg-slate-100 select-none"
                     onClick={() => requestSort('availability2Weeks')}
                   >
                     <div className="flex items-center justify-start gap-1">
-                      Status {getSortIcon('availability2Weeks')}
+                      Availability Outlook {getSortIcon('availability2Weeks')}
                     </div>
                   </th>
                   {activeWeek !== null ? (
@@ -2600,9 +2973,8 @@ function Dashboard({
                     </div>
                   </th>
                   {activeWeek !== null && (
-                    <th className="px-4 py-2 text-center">
-                      <span className="block">Annual Leave</span>
-                      <span className="block">(Week {activeWeek + 1})</span>
+                    <th className="px-4 py-2 text-center whitespace-nowrap">
+                      Annual Leave (Week {activeWeek + 1})
                     </th>
                   )}
                 </tr>
@@ -2618,13 +2990,11 @@ function Dashboard({
                     <td className="px-4 py-3 font-medium text-slate-900 text-left">
                       {entry.employeeName}
                     </td>
+                    <td className="px-4 py-3 text-left">{entry.office || '-'}</td>
                     {activeWeek !== null && (
-                      <>
-                        <td className="px-4 py-3 text-left">{entry.office || '-'}</td>
-                        <td className="px-4 py-3 text-left text-xs">
-                          {entry.languages.join(' / ') || '-'}
-                        </td>
-                      </>
+                      <td className="px-4 py-3 text-left text-xs">
+                        {entry.languages.join(' / ') || '-'}
+                      </td>
                     )}
                     <td className="px-4 py-3 text-left">{entry.availability2Weeks}</td>
                     {activeWeek !== null ? (
@@ -2692,16 +3062,24 @@ function Dashboard({
                   </th>
                   <th
                     className="px-3 py-2 cursor-pointer hover:bg-slate-100 select-none"
+                    onClick={() => requestSort('office')}
+                  >
+                    <div className="flex items-center justify-center gap-1">
+                      Office {getSortIcon('office')}
+                    </div>
+                  </th>
+                  <th
+                    className="px-3 py-2 cursor-pointer hover:bg-slate-100 select-none"
                     onClick={() => requestSort('availability2Weeks')}
                   >
                     <div className="flex items-center justify-center gap-1">
-                      Status {getSortIcon('availability2Weeks')}
+                      Availability Outlook {getSortIcon('availability2Weeks')}
                     </div>
                   </th>
                   {weekLabels.map((_, weekIdx) => (
                     <th
                       key={`week-col-${weekIdx}`}
-                      className="px-3 py-2 cursor-pointer hover:bg-slate-100 select-none"
+                      className="px-3 py-2 w-[96px] max-w-[96px] cursor-pointer hover:bg-slate-100 select-none"
                       onClick={() => requestSort(`weekLoad${weekIdx + 1}`)}
                     >
                       <div className="flex items-center justify-center gap-1">
@@ -2758,9 +3136,13 @@ function Dashboard({
                       <td className="px-3 py-3 font-medium text-slate-900 text-center">
                         {entry.employeeName}
                       </td>
+                      <td className="px-3 py-3 text-center">{entry.office || '-'}</td>
                       <td className="px-3 py-3 text-center">{entry.availability2Weeks}</td>
                       {entry.weeklyLoads.map((load, weekIdx) => (
-                        <td key={`load-${entry.employeeName}-${weekIdx}`} className="px-3 py-3 text-center">
+                        <td
+                          key={`load-${entry.employeeName}-${weekIdx}`}
+                          className="px-3 py-3 w-[96px] max-w-[96px] text-center"
+                        >
                           <span
                             className={`px-2 py-1 rounded-full text-xs font-bold ${inferLoadBadgeClass(
                               load
